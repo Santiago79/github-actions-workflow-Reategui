@@ -1,6 +1,5 @@
 name: CICD
 
-#triggers
 on: 
   push:
     branches: 
@@ -8,8 +7,6 @@ on:
       - main
   pull_request:
 
-#jobs
-#con una misma tuberia CI se pueden validar multiples configuraciones de entornos de ejecucion
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -26,7 +23,7 @@ jobs:
         run: ruff check .
   test:
     runs-on: ubuntu-latest
-    needs: lint #le hace dependiente de lint
+    needs: lint
     strategy:
       matrix:
         python-version: ["3.10", "3.13"]
@@ -41,7 +38,6 @@ jobs:
         run: pip install -r requirements.txt 
       - name: Run tests
         run: pytest 
-# la imagen del docker solo se puede crear si es que se paso el lint y los tests
   docker-build:
     runs-on: ubuntu-latest
     needs: test
@@ -51,11 +47,46 @@ jobs:
       - name: Build Docker image
         run: docker build -t github-actions-workshop:latest .
   
-  docker-push:
+  docker-push-dev:
     runs-on: ubuntu-latest
     needs: docker-build
     
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Login in Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Extract Docker Metadata 
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/github-actions-workshop
+          tags: |
+            type=raw,value=dev
+            type=ref,event=branch
+            type=sha
+      - name: Build and Push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  docker-push-prod:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/main')
 
     permissions:
       contents: read
@@ -76,7 +107,6 @@ jobs:
           tags: |
             type=raw,value=latest
             type=ref,event=branch
-            type=ref,event=tag
             type=sha
       - name: Build and Push Docker image
         uses: docker/build-push-action@v6
@@ -89,7 +119,7 @@ jobs:
     
   deploy-dev:
     runs-on: ubuntu-latest
-    needs: docker-push
+    needs: docker-push-dev
     if: github.ref == 'refs/heads/dev'
     steps:
       - name: Trigger render DEV deploy
@@ -97,8 +127,8 @@ jobs:
 
   deploy-prod:
     runs-on: ubuntu-latest
-    needs: docker-push
+    needs: docker-push-prod
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Trigger render PROD deploy
-        run: curl -X POST "${{ secrets.RENDER_PROD_DEPLOY_HOOK }}"
+        run: curl -X POST "${{ secrets.RENDER_PROD_DEPLOY_HOOOK }}"
